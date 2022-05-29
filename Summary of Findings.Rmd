@@ -1,0 +1,151 @@
+---
+title: "Who Joins Car Share Programs in Seattle?"
+author: "Kelly Dunn"
+date: "3/19/2022"
+output: odt_document
+fig_width: 9 
+fig_height: 4 
+---
+## Introduction
+
+As a data analyst with a transportation planning background, I am curious about the factors that influence people’s travel behaviors. Not owning a car myself, I use transit frequently but also enjoy using car share, a service that allows users to rent cars on a pay-per-minute, hour, or daily basis, without making a reservation. I have an interest in car share succeeding in Seattle, both for selfish  and philosophical reasons: car share allows some people to choose not to own cars, which results in less driving overall, and I think this is good for cities. Several studies exist on what influences a person’s choice to use transit, car share, or a personal car for any given trip. Less is known about what causes someone to be a member of a car share program in the first place, and who those programs tend to serve.
+
+Thus I would like to build a dashboard to help me and fellow planners and analysts understand the factors that influence car share membership in Puget Sound. Better understanding this in our region could help to shape policies that expand car share access and therefore reduce car ownership and the negative externalities that come with it. 
+
+## Methods
+```{r, include=FALSE, results = 'hide'}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+load("Model_workspace.RData")
+library(ggplot2)
+library(arm)
+library(dplyr)
+library(knitr)
+purl("Final Project.Rmd")
+```
+  
+The data set is a 2019 mail survey of 6,300 randomly selected households in the Puget Sound region. About half the households are in the city of Seattle. The survey asks respondents questions about their daily transportation habits and demographics. It was collected by the Puget Sound Regional Council, a regional transportation planning body, and is publicly available at https://www.psrc.org/household-travel-survey-program. 
+
+To prepare the data set, I recoded and transformed many variables, as follows:
+
+* The `hhincome_detailed` variable was originally reported in bins. I kept the bins but also created a second, numeric income variable, `hhincome_num`, by taking an off-center midpoint of each bin. I approximated the midpoint based on if the bin had more neighbors of a higher or lower income. About 10% of the observations for `hhincome_num` had no data. After doing a sensitivity test, I concluded that I could reasonably remove these observations without substantially changing the data set, which allowed me to keep the variable in the model. Finally, I divided `hhincome_num` by 1000 to make the results more interpretable when exploring and plotting. When modeling I subtracted 95, the area median income, from `hhincome_num`   so that the intercept would represent the median income, and then divided by 10 again so that model results would represent a \$10,000, not \$1000, change in income. The effect was too small with a \$1000 change.
+* I converted `vehicle_count`, from character to numeric. This required recoding data such as "10 or more vehicles" to just "10", but I determined that this would not cause any meaningful data loss because the difference between a household with 10 cars and one with 11 cars is not likely to be significant. 
+* The original data set contained `final_home_uvnum`, information on which of 41 "urban villages" the respondent lived in, or whether they didn't live in one at all. Urban villages are neighborhoods designated by the City of Seattle planning department as areas of higher density in which to focus urban growth. This was valuable information that could well correlate with the decision not to own a car, but 42 levels was too many to be useful to modeling. I researched five categories of urban villages and recoded that variable into `urban_village_type` to assist with modeling. 
+* Three variables,  `streetpark`, `offpark` and `offpark_cost`, contained too many null values to be useful, so I removed them entirely. This was too bad, because parking availability also factors in to a person's choice to own a car in a city, so this could have been valuable input. However, `urban_village_type` can be a proxy for the types of factors that might lead someone to not own a car. 
+  
+I selected a logistic regression model for this data because my outcome variable, `car_share`, is a binary that says whether or not a household is a member of a car sharing program. The logistic model will model the likelihood that a household is a member of a car share program. 
+
+## Results
+Exploratory plots show that households with fewer vehicles are generally more likely to be a car share member, but the effect grows more pronounced as income increases. We can see that households with lower incomes, regardless of vehicle ownership, do not join car share programs in high numbers.
+```{r, fig.height = 4, fig.width = 7}
+ggplot(surveydata, aes(x = vehicle_count, fill = factor(car_share))) + geom_bar(position = "fill") +
+  labs(x='Vehicle Count', y='Proportion with Car Share') + guides(fill='none') +
+  scale_fill_manual(values = c('white','black')) +
+  facet_grid(.~hhincome_bins, labeller = labeller(hhincome_bins = label_wrap_gen(width = 8))) + scale_x_continuous(breaks=c(0, 2, 4, 6), limits = c(0,6)) + theme_bw() +
+  theme(panel.grid.major = element_blank())
+
+```
+  
+Similarly, higher income makes a household more likely to be a car share member, but the effect of income depends on the type of urban village the household is in. The effect is most pronounced between households that are not in an urban village ("No UV") and those that are (all others). This makes sense, because living without a car in an urban village would be easier than in a less dense neighborhood. "Industrial" type urban villages are removed from this plot due to low sample sizes and to ensure readability. 
+
+```{r, fig.height = 4, fig.width = 7}
+ggplot(surveydata[surveydata$urban_village_type != "Industrial",], aes(x = hhincome_bins, fill = factor(car_share))) + geom_bar(position = "fill") +
+  labs(x='Household Income', y='Proportion with Car Share') + guides(fill='none') +
+  scale_fill_manual(values = c('white','black')) + theme(axis.text.x = element_text(angle = 45, size = 10, vjust = 0.5, hjust=0.5)) +
+  facet_grid(.~urban_village_type) + scale_x_discrete(guide = guide_axis(check.overlap = TRUE))
+
+#x axis title and labels are overlapping
+```
+
+I tried seven different models using a combination of the most important variables, as shown below. I chose `hhincome_num` as the base variable because it appeared to be more relevant than `vehicle_count.` While I originally had both a binned and a numeric variable for income, a simple model with `hhincome_num` performed better than `hhincome_bins`, so I chose to proceed using only `hhincome_num`. This table summarizes the variables used in each model:
+```{r}
+pander::pander(model_table1)
+```
+  
+```{r}
+pander::pander(model_table2)
+```
+  
+  
+<br><br>
+Model results are shown below. All models included survey weights, which resulted in much higher BIC values than models run without survey weights.
+```{r}
+pander::pander(model_selection)
+```
+  
+<br>
+The best model I found was `r best_model_name`. 
+
+Based on this model, households with a median household income of \$95,000, and no household vehicles, had a `r toprobs(lmat[1,1])`% probability being car share members (95% CI, (`r toprobs(lmat$loCI[1])`%, `r toprobs(lmat$upCI[1])`%)).   
+
+For a given number of household vehicles, each \$10,000 increase in household income was associated with a `r round(exp(lmat[2,1]),2)` times (`r round(exp(lmat$loCI[2]),2)`, `r round(exp(lmat$upCI[2]),2)`) higher odds of being a car share member. The income effect was estimated as an average across all vehicle counts. 
+
+For a given income, each increase of one household vehicle was associated with a `r round (exp(lmat[3,1]),1)` times higher odds of being a car share member, meaning the odds decreased with higher vehicle counts. The vehicle effect was estimated as an average across all incomes. 
+
+## Model Visualization
+```{r}
+
+#jitter and then plot
+jitter.binary <- function(a, jitt=.05){ 
+  ifelse (a==0, runif (length(a), 0, jitt), runif (length(a), 1-jitt, 1))
+}
+
+surveydata$car_share.jitter <- jitter.binary(surveydata$car_share) 
+#curve (invlogit (coef(fit.1)[1] + coef(fit.1)[2]*x), add=TRUE)
+```
+
+```{r, fig.width=7,fig.height=4}
+#plot of model
+ggplot(surveydata, aes(x=hhincome_num, y=car_share.jitter)) + 
+          labs(x = "Household Income", y = "car_share",size="Vehicle Count") +
+          geom_point(aes(size = vehicle_count)) +
+          scale_size(range=c(0,3)) + theme(legend.position="bottom", legend.box = "vertical") +
+          geom_smooth()
+
+```
+  
+Actual vs predicted values are shown below. 
+
+```{r}
+#create phat predictions
+surveydata$phat <- predict(best_model, type = "response") 
+#bin into 5 bins of approximately equal n; make them ordered
+surveydata$phat_binned = cut_number(surveydata$phat, n = 5, ordered_result = TRUE) 
+
+#calculate average fitted car share probability in each bin
+surveydata_predict <- surveydata %>% group_by(phat_binned)  %>%
+  summarize(Actual=mean(car_share), Predicted=mean(phat))
+pander::pander(surveydata_predict)
+```
+  
+A residuals plot by `hh_income_num` does not pass the heteroscedasticity test; residuals peak in the middle income levels, showing the model is less accurate for households with moderate incomes. 
+
+```{r}
+predict_by_income <- surveydata %>% group_by(hhincome_num)  %>%
+  summarize(Actual=mean(car_share), Predicted=mean(phat) , Residual = Actual - Predicted)
+#predict_by_inome
+
+#plot.
+
+ggplot(predict_by_income, aes(x = hhincome_num, y = Residual)) + geom_hline(yintercept=0) +
+  geom_point() + labs(x='Household Income', y='Binned Residuals', title = 'Binned Residuals by Household Income') + theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
+
+```
+  
+Conversely, a residuals plot by `vehicle_count` shows the model is less accurate for households with fewer vehicles.
+  
+```{r}
+predict_by_vehicles <- surveydata %>% group_by(vehicle_count)  %>%
+  summarize(Actual=mean(car_share), Predicted=mean(phat) , Residual = Actual - Predicted)
+#predict_by_vehicles
+ggplot(predict_by_vehicles, aes(x = vehicle_count, y = Residual)) + geom_hline(yintercept=0) +
+  geom_point() + labs(x='Vehicle Count', y='Binned Residuals', title = 'Binned Residuals by Vehicle Count')
+
+```
+  
+These two plots together show that the logistic model is still not a very good fit for this data. There is too much overlap among middle-income households who are and are not car share members.
+
+## Summary
+
+Through this exploration, I've found that household income and number of vehicles are the best predictors of a household's likelihood to join a car share program. However, it is still difficult to predict car share membership. This is because in either group there are many more people who are not car share members than who are; people only tend to be car share members when they have both high incomes and a low number of vehicles, not just one or the other. Even so, it appears there are many more factors than just income or car ownership that prevent people from becoming car share members.
+
+At the time this data was collected, car share programs were only available within Seattle city limits, and that remains the case today. However, about half of the survey respondents were outside the city. Thus, this survey was not able to ascertain a household's interest in joining car share or what choice they would make if they had it available, so it may not be helpful in informing whether a car share program should consider expanding outside the city limits. This model also may not apply to other cities around the world. In the United States and Seattle in particular, living near good transit and in a walkable neighborhood is a luxury that many people cannot afford, and thus the effect of income on car share membership may be more pronounced here than elsewhere. 
